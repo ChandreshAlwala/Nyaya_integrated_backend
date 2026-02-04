@@ -8,9 +8,17 @@ from pathlib import Path
 
 # Add all repository paths to Python path
 current_dir = Path(__file__).parent
-sys.path.insert(0, str(current_dir / "Nyaya_AI"))
-sys.path.insert(0, str(current_dir / "AI_ASSISTANT_PhaseB_Integration"))
-sys.path.insert(0, str(current_dir / "nyaya-legal-procedure-datasets"))
+nyaya_ai_path = str(current_dir / "Nyaya_AI")
+if nyaya_ai_path not in sys.path:
+    sys.path.insert(0, nyaya_ai_path)
+    
+ai_assistant_path = str(current_dir / "AI_ASSISTANT_PhaseB_Integration")
+if ai_assistant_path not in sys.path:
+    sys.path.insert(0, ai_assistant_path)
+    
+datasets_path = str(current_dir / "nyaya-legal-procedure-datasets")
+if datasets_path not in sys.path:
+    sys.path.insert(0, datasets_path)
 
 from fastapi import FastAPI, Request, HTTPException, Depends, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
