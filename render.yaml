@@ -3,7 +3,7 @@ services:
     name: nyaya-backend
     env: python
     buildCommand: pip install -r minimal_requirements.txt
-    startCommand: python robust_legal_query.py
+    startCommand: python ultra_robust_backend.py
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
