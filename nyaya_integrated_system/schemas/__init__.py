@@ -1,1 +1,0 @@
-# Nyaya Integrated System - Schemas Module
