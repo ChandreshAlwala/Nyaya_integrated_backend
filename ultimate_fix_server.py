@@ -157,6 +157,7 @@ class StandaloneHandler(BaseHTTPRequestHandler):
                 # Process the legal query with guaranteed response structure
                 response = {
                     "trace_id": str(uuid.uuid4()),
+                    "status": "processed_successfully",
                     "domain": request_data.get('domain_hint', 'CIVIL'),
                     "jurisdiction": request_data.get('jurisdiction_hint', 'IN'),
                     "confidence": 0.85,
@@ -198,7 +199,8 @@ class StandaloneHandler(BaseHTTPRequestHandler):
                         },
                         "processing_mode": "standalone_ultimate"
                     },
-                    "message": "Legal query processed successfully with comprehensive legal guidance"
+                    "message": "Legal query processed successfully with comprehensive legal guidance",
+                    "timestamp": datetime.utcnow().isoformat()
                 }
                 self.send_json_response(response, 200)
                 
