@@ -3,7 +3,7 @@ services:
     name: nyaya-backend
     env: python
     buildCommand: pip install -r minimal_requirements.txt
-    startCommand: python ultimate_fix_server.py
+    startCommand: python production_grade_server.py
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
