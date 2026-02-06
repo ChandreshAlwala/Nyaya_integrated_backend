@@ -28,6 +28,13 @@ except ImportError:
     FASTAPI_AVAILABLE = False
     print("FastAPI not available, using basic HTTP server")
 
+# Import legal data loader
+try:
+    from legal_data_loader import legal_data_loader
+except ImportError:
+    print("LegalDataLoader not available")
+    legal_data_loader = None
+
 # Set up comprehensive logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -493,55 +500,106 @@ class IntegratedNyayaHandler(BaseHTTPRequestHandler):
             self.send_json_response(response, 400)
             return
         
-        # Process the legal query with guaranteed response structure
-        response = {
-            "trace_id": str(uuid.uuid4()),
-            "status": "processed_successfully",
-            "domain": request_data.get('domain_hint', 'CIVIL'),
-            "jurisdiction": request_data.get('jurisdiction_hint', 'IN'),
-            "confidence": 0.85,
-            "legal_route": [
-                {
-                    "step": "INITIAL_ASSESSMENT",
-                    "description": "Initial legal assessment and case evaluation",
-                    "timeline": "1-2 business days",
-                    "confidence": 0.9
+        if len(query) < 3:
+            response = {
+                "status": "validation_error",
+                "error": "Query must be at least 3 characters long",
+                "message": "Validation failed: query too short",
+                "timestamp": datetime.utcnow().isoformat(),
+                "trace_id": str(uuid.uuid4())
+            }
+            self.send_json_response(response, 400)
+            return
+        
+        # Check if legal data loader is available
+        if legal_data_loader is None:
+            response = {
+                "trace_id": str(uuid.uuid4()),
+                "status": "error",
+                "error": "Legal data loader not available",
+                "message": "Legal data loader is not available for processing queries",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            self.send_json_response(response, 500)
+            return
+        
+        # Process the legal query with real data from legal data loader
+        trace_id = str(uuid.uuid4())
+        
+        try:
+            # Detect jurisdiction and classify domain
+            jurisdiction = legal_data_loader.detect_jurisdiction(query, request_data.get('jurisdiction_hint'))
+            domain, subdomain, domain_confidence = legal_data_loader.classify_domain(query, jurisdiction)
+            
+            # Search for relevant legal data
+            legal_data = legal_data_loader.search_law_data(query, jurisdiction, domain, subdomain)
+            
+            # Format response with real legal data
+            legal_response = legal_data_loader.format_response(
+                query, jurisdiction, domain, subdomain, legal_data, domain_confidence
+            )
+            
+            # Build final response with enforcement metadata
+            response = {
+                "trace_id": trace_id,
+                "status": legal_response["status"],
+                "domain": domain,
+                "jurisdiction": jurisdiction,
+                "confidence": legal_response["confidence"],
+                "legal_guidance": legal_response.get("legal_guidance", []),
+                "citations": legal_response.get("citations", []),
+                "disclaimer": legal_response.get("disclaimer", ""),
+                "legal_route": [
+                    {
+                        "step": "JURISDICTION_DETECTION",
+                        "description": f"Detected jurisdiction: {jurisdiction}",
+                        "timeline": "immediate",
+                        "confidence": 0.95 if request_data.get('jurisdiction_hint') else 0.8
+                    },
+                    {
+                        "step": "DOMAIN_CLASSIFICATION",
+                        "description": f"Classified as {domain}/{subdomain}",
+                        "timeline": "immediate", 
+                        "confidence": domain_confidence
+                    },
+                    {
+                        "step": "LEGAL_DATA_RETRIEVAL",
+                        "description": f"Retrieved {len(legal_data) if legal_data else 0} relevant legal provisions",
+                        "timeline": "milliseconds",
+                        "confidence": legal_response["confidence"]
+                    }
+                ],
+                "enforcement_metadata": {
+                    "status": "processed_successfully",
+                    "rule_id": "INTEGRATED_001",
+                    "decision": "ALLOW",
+                    "reasoning": "Legal query processed with real data from jurisdiction databases",
+                    "signed_proof": {
+                        "hash": "integrated_proof_" + trace_id[:8],
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "validator": "integrated_system"
+                    },
+                    "processing_mode": "data_driven_backend"
                 },
-                {
-                    "step": "STRATEGY_DEVELOPMENT", 
-                    "description": "Develop legal strategy and action plan",
-                    "timeline": "3-5 business days",
-                    "confidence": 0.85
-                },
-                {
-                    "step": "DOCUMENT_PREPARATION",
-                    "description": "Prepare required legal documents and filings",
-                    "timeline": "1-2 weeks",
-                    "confidence": 0.8
-                },
-                {
-                    "step": "EXECUTION_PHASE",
-                    "description": "Execute legal strategy and proceed with case",
-                    "timeline": "ongoing",
-                    "confidence": 0.75
-                }
-            ],
-            "enforcement_metadata": {
-                "status": "processed_successfully",
-                "rule_id": "INTEGRATED_001",
-                "decision": "ALLOW",
-                "reasoning": "Legal query processed successfully with comprehensive guidance",
-                "signed_proof": {
-                    "hash": "integrated_proof_" + str(uuid.uuid4())[:8],
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "validator": "integrated_system"
-                },
-                "processing_mode": "integrated_backend"
-            },
-            "message": "Legal query processed successfully with comprehensive legal guidance",
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        self.send_json_response(response, 200)
+                "message": legal_response["message"],
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+            self.send_json_response(response, 200)
+            
+        except Exception as e:
+            logger.error(f"Error processing legal query: {e}")
+            logger.error(traceback.format_exc())
+            
+            response = {
+                "trace_id": str(uuid.uuid4()),
+                "status": "error",
+                "error": "Internal server error occurred while processing query",
+                "message": "An error occurred while retrieving legal information",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            self.send_json_response(response, 500)
+            return
     
     @requires_approval
     def handle_nyaya_query(self, request_data, path):
@@ -560,81 +618,138 @@ class IntegratedNyayaHandler(BaseHTTPRequestHandler):
             self.send_json_response(response, 400)
             return
         
-        # Process the Nyaya query with enhanced response structure
+        if len(query) < 3:
+            response = {
+                "status": "validation_error",
+                "error": "Query must be at least 3 characters long",
+                "message": "Validation failed: query too short",
+                "timestamp": datetime.utcnow().isoformat(),
+                "trace_id": str(uuid.uuid4())
+            }
+            self.send_json_response(response, 400)
+            return
+        
+        # Check if legal data loader is available
+        if legal_data_loader is None:
+            response = {
+                "trace_id": str(uuid.uuid4()),
+                "status": "error",
+                "error": "Legal data loader not available",
+                "message": "Legal data loader is not available for processing queries",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            self.send_json_response(response, 500)
+            return
+        
+        # Process the Nyaya query with real data from legal data loader
         trace_id = str(uuid.uuid4())
-        response = {
-            "trace_id": trace_id,
-            "status": "processed_successfully",
-            "domain": request_data.get('domain_hint', 'GENERAL'),
-            "jurisdiction": request_data.get('jurisdiction_hint', 'IN'),
-            "confidence": 0.88,
-            "legal_route": [
-                {
-                    "step": "JURISDICTION_ROUTING",
-                    "description": "Query routed to appropriate jurisdiction",
-                    "timeline": "immediate",
-                    "confidence": 0.95
+        
+        try:
+            # Detect jurisdiction and classify domain
+            jurisdiction = legal_data_loader.detect_jurisdiction(query, request_data.get('jurisdiction_hint'))
+            domain, subdomain, domain_confidence = legal_data_loader.classify_domain(query, jurisdiction)
+            
+            # Search for relevant legal data
+            legal_data = legal_data_loader.search_law_data(query, jurisdiction, domain, subdomain)
+            
+            # Format response with real legal data
+            legal_response = legal_data_loader.format_response(
+                query, jurisdiction, domain, subdomain, legal_data, domain_confidence
+            )
+            
+            # Build final response with provenance chain
+            response = {
+                "trace_id": trace_id,
+                "status": legal_response["status"],
+                "domain": domain,
+                "jurisdiction": jurisdiction,
+                "confidence": legal_response["confidence"],
+                "legal_guidance": legal_response.get("legal_guidance", []),
+                "citations": legal_response.get("citations", []),
+                "disclaimer": legal_response.get("disclaimer", ""),
+                "legal_route": [
+                    {
+                        "step": "JURISDICTION_ROUTING",
+                        "description": f"Query routed to {jurisdiction} jurisdiction",
+                        "timeline": "immediate",
+                        "confidence": 0.95
+                    },
+                    {
+                        "step": "DOMAIN_ANALYSIS",
+                        "description": f"Legal domain identified: {domain}/{subdomain}",
+                        "timeline": "milliseconds",
+                        "confidence": domain_confidence
+                    },
+                    {
+                        "step": "DATA_RETRIEVAL",
+                        "description": f"Fetched {len(legal_data) if legal_data else 0} relevant legal provisions from database",
+                        "timeline": "milliseconds",
+                        "confidence": legal_response["confidence"]
+                    }
+                ],
+                "provenance_chain": [
+                    {
+                        "step": "QUERY_RECEIVED",
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "component": "API_GATEWAY",
+                        "details": "Query received and validated"
+                    },
+                    {
+                        "step": "JURISDICTION_DETECTION",
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "component": "DOMAIN_CLASSIFIER",
+                        "details": f"Detected jurisdiction: {jurisdiction}"
+                    },
+                    {
+                        "step": "LEGAL_DATA_FETCH",
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "component": "LEGAL_DATABASE",
+                        "details": f"Retrieved {len(legal_data) if legal_data else 0} legal provisions"
+                    },
+                    {
+                        "step": "APPROVAL_CHECK",
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "component": "APPROVAL_SYSTEM",
+                        "details": "Safety and enforcement approval passed"
+                    }
+                ],
+                "reasoning_trace": {
+                    "jurisdiction_rationale": f"Based on query content and {jurisdiction} legal framework",
+                    "domain_classification": f"{domain}/{subdomain} with confidence {domain_confidence:.2f}",
+                    "data_sources": [f"{jurisdiction.lower()}_law_dataset.json"],
+                    "confidence_factors": ["query_specificity", "data_availability", "jurisdiction_matching"]
                 },
-                {
-                    "step": "LEGAL_ANALYSIS",
-                    "description": "Detailed legal analysis performed",
-                    "timeline": "seconds",
-                    "confidence": 0.9
+                "enforcement_metadata": {
+                    "status": "enforcement_approved",
+                    "rule_id": "NYAYA_INTEGRATION_RULE_001",
+                    "decision": "ALLOW",
+                    "reasoning": "Query processed with real legal data from jurisdiction databases",
+                    "signed_proof": {
+                        "hash": "nyaya_proof_" + trace_id[:8],
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "validator": "nyaya_enforcement_engine"
+                    },
+                    "processing_mode": "sovereign_compliant_data_driven"
                 },
-                {
-                    "step": "ENFORCEMENT_CHECK",
-                    "description": "Enforcement compliance verified",
-                    "timeline": "milliseconds",
-                    "confidence": 1.0
-                },
-                {
-                    "step": "RESPONSE_GENERATION",
-                    "description": "Response generated with provenance",
-                    "timeline": "milliseconds",
-                    "confidence": 0.98
-                }
-            ],
-            "provenance_chain": [
-                {
-                    "step": "QUERY_RECEIVED",
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "component": "API_GATEWAY",
-                    "details": "Query received and validated"
-                },
-                {
-                    "step": "APPROVAL_CHECK",
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "component": "APPROVAL_SYSTEM",
-                    "details": "Safety and enforcement approval passed"
-                },
-                {
-                    "step": "PROCESSING_COMPLETE",
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "component": "LEGAL_AGENT",
-                    "details": "Legal processing completed successfully"
-                }
-            ],
-            "reasoning_trace": {
-                "jurisdiction_rationale": "Based on jurisdiction hint and query content",
-                "confidence_factors": ["query_specificity", "data_availability", "precedent_strength"],
-                "alternative_considerations": []
-            },
-            "enforcement_metadata": {
-                "status": "enforcement_approved",
-                "rule_id": "NYAYA_INTEGRATION_RULE_001",
-                "decision": "ALLOW",
-                "reasoning": "Query meets all enforcement criteria",
-                "signed_proof": {
-                    "hash": "nyaya_proof_" + trace_id[:8],
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "validator": "nyaya_enforcement_engine"
-                },
-                "processing_mode": "sovereign_compliant"
-            },
-            "message": "Legal query processed successfully with full provenance chain",
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        self.send_json_response(response, 200)
+                "message": legal_response["message"],
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+            self.send_json_response(response, 200)
+            
+        except Exception as e:
+            logger.error(f"Error processing Nyaya query: {e}")
+            logger.error(traceback.format_exc())
+            
+            response = {
+                "trace_id": str(uuid.uuid4()),
+                "status": "error",
+                "error": "Internal server error occurred while processing query",
+                "message": "An error occurred while retrieving legal information",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            self.send_json_response(response, 500)
+            return
     
     def do_POST(self):
         """Handle POST requests with comprehensive error handling and approval system"""
@@ -1226,6 +1341,8 @@ def create_fastapi_app():
     from typing import Optional
     import asyncio
     
+    # Legal data loader already available globally
+    
     class QueryRequest(BaseModel):
         query: str
         jurisdiction_hint: str = None
@@ -1247,7 +1364,17 @@ def create_fastapi_app():
     
     @app.post("/api/legal/query")
     async def legal_query(request: QueryRequest):
-        """Process legal queries with jurisdiction routing"""
+        """Process legal queries with jurisdiction routing and real data fetching"""
+        # Check if legal data loader is available
+        if legal_data_loader is None:
+            return {
+                "trace_id": str(uuid.uuid4()),
+                "status": "error",
+                "error": "Legal data loader not available",
+                "message": "Legal data loader is not available for processing queries",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        
         # Validate query
         if not request.query or len(request.query.strip()) < 3:
             raise HTTPException(status_code=400, detail={
@@ -1258,48 +1385,95 @@ def create_fastapi_app():
                 "trace_id": str(uuid.uuid4())
             })
         
-        # Process the legal query
+        # Process the legal query with real data
         trace_id = str(uuid.uuid4())
-        response = {
-            "trace_id": trace_id,
-            "status": "processed_successfully",
-            "domain": request.domain_hint or "CIVIL",
-            "jurisdiction": request.jurisdiction_hint or "IN",
-            "confidence": 0.85,
-            "legal_route": [
-                {
-                    "step": "INITIAL_ASSESSMENT",
-                    "description": "Initial legal assessment and case evaluation",
-                    "timeline": "1-2 business days",
-                    "confidence": 0.9
+        
+        try:
+            # Detect jurisdiction and classify domain
+            jurisdiction = legal_data_loader.detect_jurisdiction(request.query, request.jurisdiction_hint)
+            domain, subdomain, domain_confidence = legal_data_loader.classify_domain(request.query, jurisdiction)
+            
+            # Search for relevant legal data
+            legal_data = legal_data_loader.search_law_data(request.query, jurisdiction, domain, subdomain)
+            
+            # Format response with real legal data
+            legal_response = legal_data_loader.format_response(
+                request.query, jurisdiction, domain, subdomain, legal_data, domain_confidence
+            )
+            
+            # Build final response with enforcement metadata
+            response = {
+                "trace_id": trace_id,
+                "status": legal_response["status"],
+                "domain": domain,
+                "jurisdiction": jurisdiction,
+                "confidence": legal_response["confidence"],
+                "legal_guidance": legal_response.get("legal_guidance", []),
+                "citations": legal_response.get("citations", []),
+                "disclaimer": legal_response.get("disclaimer", ""),
+                "legal_route": [
+                    {
+                        "step": "JURISDICTION_DETECTION",
+                        "description": f"Detected jurisdiction: {jurisdiction}",
+                        "timeline": "immediate",
+                        "confidence": 0.95 if request.jurisdiction_hint else 0.8
+                    },
+                    {
+                        "step": "DOMAIN_CLASSIFICATION",
+                        "description": f"Classified as {domain}/{subdomain}",
+                        "timeline": "immediate", 
+                        "confidence": domain_confidence
+                    },
+                    {
+                        "step": "LEGAL_DATA_RETRIEVAL",
+                        "description": f"Retrieved {len(legal_data) if legal_data else 0} relevant legal provisions",
+                        "timeline": "milliseconds",
+                        "confidence": legal_response["confidence"]
+                    }
+                ],
+                "enforcement_metadata": {
+                    "status": "processed_successfully",
+                    "rule_id": "INTEGRATED_001",
+                    "decision": "ALLOW",
+                    "reasoning": "Legal query processed with real data from jurisdiction databases",
+                    "signed_proof": {
+                        "hash": "integrated_proof_" + trace_id[:8],
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "validator": "integrated_system"
+                    },
+                    "processing_mode": "data_driven_backend"
                 },
-                {
-                    "step": "STRATEGY_DEVELOPMENT", 
-                    "description": "Develop legal strategy and action plan",
-                    "timeline": "3-5 business days",
-                    "confidence": 0.85
-                }
-            ],
-            "enforcement_metadata": {
-                "status": "processed_successfully",
-                "rule_id": "INTEGRATED_001",
-                "decision": "ALLOW",
-                "reasoning": "Legal query processed successfully with comprehensive guidance",
-                "signed_proof": {
-                    "hash": "integrated_proof_" + trace_id[:8],
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "validator": "integrated_system"
-                },
-                "processing_mode": "integrated_backend"
-            },
-            "message": "Legal query processed successfully with comprehensive legal guidance",
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        return response
+                "message": legal_response["message"],
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+            return response
+        
+        except Exception as e:
+            logger.error(f"Error processing legal query: {e}")
+            logger.error(traceback.format_exc())
+            
+            return {
+                "trace_id": str(uuid.uuid4()),
+                "status": "error",
+                "error": "Internal server error occurred while processing query",
+                "message": "An error occurred while retrieving legal information",
+                "timestamp": datetime.utcnow().isoformat()
+            }
     
     @app.post("/nyaya/query")
     async def nyaya_query(request: QueryRequest):
-        """Handle Nyaya-specific legal query with advanced features"""
+        """Handle Nyaya-specific legal query with advanced features and real data"""
+        # Check if legal data loader is available
+        if legal_data_loader is None:
+            return {
+                "trace_id": str(uuid.uuid4()),
+                "status": "error",
+                "error": "Legal data loader not available",
+                "message": "Legal data loader is not available for processing queries",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        
         # Validate query
         if not request.query or len(request.query.strip()) < 3:
             raise HTTPException(status_code=400, detail={
@@ -1310,67 +1484,127 @@ def create_fastapi_app():
                 "trace_id": str(uuid.uuid4())
             })
         
-        # Process the Nyaya query
+        # Process the Nyaya query with real data
         trace_id = str(uuid.uuid4())
-        response = {
-            "trace_id": trace_id,
-            "status": "processed_successfully",
-            "domain": request.domain_hint or "GENERAL",
-            "jurisdiction": request.jurisdiction_hint or "IN",
-            "confidence": 0.88,
-            "legal_route": [
-                {
-                    "step": "JURISDICTION_ROUTING",
-                    "description": "Query routed to appropriate jurisdiction",
-                    "timeline": "immediate",
-                    "confidence": 0.95
+        
+        try:
+            # Detect jurisdiction and classify domain
+            jurisdiction = legal_data_loader.detect_jurisdiction(request.query, request.jurisdiction_hint)
+            domain, subdomain, domain_confidence = legal_data_loader.classify_domain(request.query, jurisdiction)
+            
+            # Search for relevant legal data
+            legal_data = legal_data_loader.search_law_data(request.query, jurisdiction, domain, subdomain)
+            
+            # Format response with real legal data
+            legal_response = legal_data_loader.format_response(
+                request.query, jurisdiction, domain, subdomain, legal_data, domain_confidence
+            )
+            
+            # Build final response with provenance chain
+            response = {
+                "trace_id": trace_id,
+                "status": legal_response["status"],
+                "domain": domain,
+                "jurisdiction": jurisdiction,
+                "confidence": legal_response["confidence"],
+                "legal_guidance": legal_response.get("legal_guidance", []),
+                "citations": legal_response.get("citations", []),
+                "disclaimer": legal_response.get("disclaimer", ""),
+                "legal_route": [
+                    {
+                        "step": "JURISDICTION_ROUTING",
+                        "description": f"Query routed to {jurisdiction} jurisdiction",
+                        "timeline": "immediate",
+                        "confidence": 0.95
+                    },
+                    {
+                        "step": "DOMAIN_ANALYSIS",
+                        "description": f"Legal domain identified: {domain}/{subdomain}",
+                        "timeline": "milliseconds",
+                        "confidence": domain_confidence
+                    },
+                    {
+                        "step": "DATA_RETRIEVAL",
+                        "description": f"Fetched {len(legal_data) if legal_data else 0} relevant legal provisions from database",
+                        "timeline": "milliseconds",
+                        "confidence": legal_response["confidence"]
+                    }
+                ],
+                "provenance_chain": [
+                    {
+                        "step": "QUERY_RECEIVED",
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "component": "API_GATEWAY",
+                        "details": "Query received and validated"
+                    },
+                    {
+                        "step": "JURISDICTION_DETECTION",
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "component": "DOMAIN_CLASSIFIER",
+                        "details": f"Detected jurisdiction: {jurisdiction}"
+                    },
+                    {
+                        "step": "LEGAL_DATA_FETCH",
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "component": "LEGAL_DATABASE",
+                        "details": f"Retrieved {len(legal_data) if legal_data else 0} legal provisions"
+                    },
+                    {
+                        "step": "APPROVAL_CHECK",
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "component": "APPROVAL_SYSTEM",
+                        "details": "Safety and enforcement approval passed"
+                    }
+                ],
+                "reasoning_trace": {
+                    "jurisdiction_rationale": f"Based on query content and {jurisdiction} legal framework",
+                    "domain_classification": f"{domain}/{subdomain} with confidence {domain_confidence:.2f}",
+                    "data_sources": [f"{jurisdiction.lower()}_law_dataset.json"],
+                    "confidence_factors": ["query_specificity", "data_availability", "jurisdiction_matching"]
                 },
-                {
-                    "step": "LEGAL_ANALYSIS",
-                    "description": "Detailed legal analysis performed",
-                    "timeline": "seconds",
-                    "confidence": 0.9
-                }
-            ],
-            "provenance_chain": [
-                {
-                    "step": "QUERY_RECEIVED",
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "component": "API_GATEWAY",
-                    "details": "Query received and validated"
+                "enforcement_metadata": {
+                    "status": "enforcement_approved",
+                    "rule_id": "NYAYA_INTEGRATION_RULE_001",
+                    "decision": "ALLOW",
+                    "reasoning": "Query processed with real legal data from jurisdiction databases",
+                    "signed_proof": {
+                        "hash": "nyaya_proof_" + trace_id[:8],
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "validator": "nyaya_enforcement_engine"
+                    },
+                    "processing_mode": "sovereign_compliant_data_driven"
                 },
-                {
-                    "step": "APPROVAL_CHECK",
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "component": "APPROVAL_SYSTEM",
-                    "details": "Safety and enforcement approval passed"
-                }
-            ],
-            "reasoning_trace": {
-                "jurisdiction_rationale": "Based on jurisdiction hint and query content",
-                "confidence_factors": ["query_specificity", "data_availability", "precedent_strength"],
-                "alternative_considerations": []
-            },
-            "enforcement_metadata": {
-                "status": "enforcement_approved",
-                "rule_id": "NYAYA_INTEGRATION_RULE_001",
-                "decision": "ALLOW",
-                "reasoning": "Query meets all enforcement criteria",
-                "signed_proof": {
-                    "hash": "nyaya_proof_" + trace_id[:8],
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "validator": "nyaya_enforcement_engine"
-                },
-                "processing_mode": "sovereign_compliant"
-            },
-            "message": "Legal query processed successfully with full provenance chain",
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        return response
+                "message": legal_response["message"],
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+            return response
+        
+        except Exception as e:
+            logger.error(f"Error processing Nyaya query: {e}")
+            logger.error(traceback.format_exc())
+            
+            return {
+                "trace_id": str(uuid.uuid4()),
+                "status": "error",
+                "error": "Internal server error occurred while processing query",
+                "message": "An error occurred while retrieving legal information",
+                "timestamp": datetime.utcnow().isoformat()
+            }
     
     @app.post("/nyaya/multi_jurisdiction")
     async def multi_jurisdiction_query(request: MultiJurisdictionRequest):
-        """Handle multi-jurisdiction query"""
+        """Handle multi-jurisdiction query with real data from multiple jurisdictions"""
+        # Check if legal data loader is available
+        if legal_data_loader is None:
+            return {
+                "trace_id": str(uuid.uuid4()),
+                "status": "error",
+                "error": "Legal data loader not available",
+                "message": "Legal data loader is not available for processing queries",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        
         # Validate required fields
         if not request.query or len(request.query.strip()) < 3:
             raise HTTPException(status_code=400, detail={
@@ -1390,38 +1624,68 @@ def create_fastapi_app():
                 "trace_id": str(uuid.uuid4())
             })
         
-        # Process multi-jurisdiction query
+        # Process multi-jurisdiction query with real data
         trace_id = str(uuid.uuid4())
-        comparative_analysis = {}
-        for jurisdiction in request.jurisdictions[:3]:  # Limit to first 3 for performance
-            comparative_analysis[jurisdiction] = {
-                "jurisdiction": jurisdiction,
-                "confidence": 0.82,
-                "analysis": f"Analysis for {jurisdiction} jurisdiction completed",
-                "legal_route": ["MULTI_JURISDICTION_ROUTE"],
+        
+        try:
+            comparative_analysis = {}
+            
+            for jurisdiction in request.jurisdictions[:3]:  # Limit to first 3 for performance
+                # Get domain classification for this jurisdiction
+                domain, subdomain, domain_confidence = legal_data_loader.classify_domain(request.query, jurisdiction)
+                
+                # Search for relevant legal data
+                legal_data = legal_data_loader.search_law_data(request.query, jurisdiction, domain, subdomain)
+                
+                # Format response with real legal data
+                legal_response = legal_data_loader.format_response(
+                    request.query, jurisdiction, domain, subdomain, legal_data, domain_confidence
+                )
+                
+                comparative_analysis[jurisdiction] = {
+                    "jurisdiction": jurisdiction,
+                    "domain": domain,
+                    "subdomain": subdomain,
+                    "confidence": legal_response["confidence"],
+                    "legal_guidance": legal_response.get("legal_guidance", []),
+                    "citations": legal_response.get("citations", []),
+                    "analysis": f"Analysis for {jurisdiction} jurisdiction completed with {len(legal_data) if legal_data else 0} legal provisions",
+                    "legal_route": ["MULTI_JURISDICTION_ROUTE"],
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            
+            response = {
+                "trace_id": trace_id,
+                "status": "multi_jurisdiction_processed",
+                "confidence": 0.85,
+                "comparative_analysis": comparative_analysis,
+                "enforcement_metadata": {
+                    "status": "enforcement_approved",
+                    "rule_id": "MULTI_JURISDICTION_RULE_001",
+                    "decision": "ALLOW",
+                    "reasoning": "Multi-jurisdiction query processed with real legal data from multiple jurisdiction databases",
+                    "signed_proof": {
+                        "hash": "multi_proof_" + trace_id[:8],
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "validator": "multi_jurisdiction_engine"
+                    }
+                },
+                "message": f"Multi-jurisdiction analysis completed for {len(comparative_analysis)} jurisdictions with real legal data",
                 "timestamp": datetime.utcnow().isoformat()
             }
+            return response
         
-        response = {
-            "trace_id": trace_id,
-            "status": "multi_jurisdiction_processed",
-            "confidence": 0.85,
-            "comparative_analysis": comparative_analysis,
-            "enforcement_metadata": {
-                "status": "enforcement_approved",
-                "rule_id": "MULTI_JURISDICTION_RULE_001",
-                "decision": "ALLOW",
-                "reasoning": "Multi-jurisdiction query processed successfully",
-                "signed_proof": {
-                    "hash": "multi_proof_" + trace_id[:8],
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "validator": "multi_jurisdiction_engine"
-                }
-            },
-            "message": f"Multi-jurisdiction analysis completed for {len(comparative_analysis)} jurisdictions",
-            "timestamp": datetime.utcnow().isoformat()
-        }
-        return response
+        except Exception as e:
+            logger.error(f"Error processing multi-jurisdiction query: {e}")
+            logger.error(traceback.format_exc())
+            
+            return {
+                "trace_id": str(uuid.uuid4()),
+                "status": "error",
+                "error": "Internal server error occurred while processing query",
+                "message": "An error occurred while retrieving legal information",
+                "timestamp": datetime.utcnow().isoformat()
+            }
     
     @app.post("/nyaya/feedback")
     async def submit_feedback(request: FeedbackRequest):
